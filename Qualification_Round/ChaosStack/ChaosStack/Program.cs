@@ -1,10 +1,8 @@
-﻿using System;
+﻿using Newtonsoft.Json;
+using Newtonsoft.Json.Linq;
+using System;
 using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Net;
-using System.Text;
-using System.Threading.Tasks;
+using System.Threading;
 using System.Windows.Forms;
 
 namespace ChaosStack
@@ -13,51 +11,53 @@ namespace ChaosStack
     {
         private const string api_key = "6ZC9jyeffYUudGnrUNSRoijAL7R2";
         private const string base_url = " https://us-central1-chaosstack.cloudfunctions.net/";
+        private const string destination = "47.478373, 19.048594";
 
-        static string Send_GetRequest(string uri)
+        static JObject CalculateSolution(JObject jsonGenResponse)
         {
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(uri);
-            request.Headers.Add("Authorization", api_key);
-            request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
+            var solution = new JObject();
+            solution["solutions"] = new JArray();
+            var solutions = solution["solutions"] as JArray;
 
-            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
-            using (Stream stream = response.GetResponseStream())
-            using (StreamReader reader = new StreamReader(stream))
+            foreach (JArray tests in jsonGenResponse["tests"])
             {
-                return reader.ReadToEnd();
+                int furthestIdx = 0;
+                int furthestDur = 0;
+                for (int i = 0; i < tests.Count; i++)
+                {
+                    var test = tests[i];
+                    Thread.Sleep(1);
+                    var gMapsRes = ManageGMaps.GetGMapsResult(test["lat"].ToString(), test["lon"].ToString(), destination);
+                    var dur = int.Parse(((gMapsRes["rows"] as JArray)[0]["elements"] as JArray)[0]["duration"]["value"].ToString()) / 60;
+                    if (dur > furthestDur)
+                    {
+                        furthestIdx = i;
+                        furthestDur = dur;
+                    }
+                }
+                var result = new JObject();
+                result["farthestIndex"] = furthestIdx;
+                result["farthestDuration"] = furthestDur;
+                solutions.Add(result);
             }
-        }
 
-        public string Send_PostRequest(string uri, string data, string contentType, string method = "POST")
-        {
-            byte[] dataBytes = Encoding.UTF8.GetBytes(data);
-
-            HttpWebRequest request = (HttpWebRequest)WebRequest.Create(uri);
-            request.AutomaticDecompression = DecompressionMethods.GZip | DecompressionMethods.Deflate;
-            request.ContentLength = dataBytes.Length;
-            request.ContentType = contentType;
-            request.Method = method;
-
-            using (Stream requestBody = request.GetRequestStream())
-            {
-                requestBody.Write(dataBytes, 0, dataBytes.Length);
-            }
-
-            using (HttpWebResponse response = (HttpWebResponse)request.GetResponse())
-            using (Stream stream = response.GetResponseStream())
-            using (StreamReader reader = new StreamReader(stream))
-            {
-                return reader.ReadToEnd();
-            }
+            return solution;
         }
 
         [STAThread]
         static void Main(string[] args)
         {
-            var genResponse = Send_GetRequest(base_url + "/generate");
-            Console.WriteLine(genResponse);
-            Clipboard.SetText(genResponse);
-            Console.ReadLine();
+            var apiHeader = new List<KeyValuePair<string, string>>() { new KeyValuePair<string, string>("Authorization", api_key) };
+            var genResponse = HTTP_Requests.Send_GetRequest(base_url + "/generate", apiHeader);
+            var jsonGenResponse = JObject.Parse(genResponse);
+            var testSuiteToken = jsonGenResponse["testSuiteToken"];
+
+            var solution = CalculateSolution(jsonGenResponse);
+
+            var result = HTTP_Requests.Send_PostRequest(base_url + "/submit?token=" + testSuiteToken, solution.ToString(), "application/json", apiHeader);
+            Console.WriteLine(result);
+            Clipboard.SetText(result);
+            Console.ReadKey();
         }
     }
 }
